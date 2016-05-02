@@ -50,6 +50,8 @@
 # include <termios.h>
 #endif
 
+#include "serial_rs485.h"
+
 #ifdef vxWorks
 /*
  * Fake termios structure
@@ -71,6 +73,7 @@ typedef struct {
     unsigned long      nRead;
     unsigned long      nWritten;
     struct termios     termios;
+    struct serial_rs485  rs485;
     int                baud;
     double             readTimeout;
     double             writeTimeout;
@@ -120,6 +123,15 @@ applyOptions(asynUser *pasynUser, ttyController_t *tty)
         return asynError;
     }
 #endif
+
+#ifdef ASYN_RS485_SUPPORTED
+    if( ioctl( tty->fd, TIOCSRS485, &tty->rs485 ) < 0 ) {
+        epicsSnprintf(pasynUser->errorMessage, pasynUser->errorMessageSize,
+                              "ioctl TIOCSRS485 failed: %s", strerror(errno));
+        return asynError;
+    }
+#endif
+
     return asynSuccess;
 }
 
@@ -193,6 +205,21 @@ getOption(void *drvPvt, asynUser *pasynUser,
         l = epicsSnprintf(val, valSize, "%c",  (tty->termios.c_iflag & IXOFF) ? 'Y' : 'N');
 #endif
     }
+    else if (epicsStrCaseCmp(key, "rs485_enable") == 0) {
+        l = epicsSnprintf(val, valSize, "%c",  (tty->rs485.flags & SER_RS485_ENABLED) ? 'Y' : 'N');
+    }
+    else if (epicsStrCaseCmp(key, "rs485_rts_on_send") == 0) {
+        l = epicsSnprintf(val, valSize, "%c",  (tty->rs485.flags & SER_RS485_RTS_ON_SEND) ? 'Y' : 'N');
+    }
+    else if (epicsStrCaseCmp(key, "rs485_rts_after_send") == 0) {
+        l = epicsSnprintf(val, valSize, "%c",  (tty->rs485.flags & SER_RS485_RTS_AFTER_SEND) ? 'Y' : 'N');
+    }
+    else if (epicsStrCaseCmp(key, "rs485_delay_rts_before_send") == 0) {
+        l = epicsSnprintf(val, valSize, "%d", tty->rs485.delay_rts_before_send);
+    }
+    else if (epicsStrCaseCmp(key, "rs485_delay_rts_after_send") == 0) {
+        l = epicsSnprintf(val, valSize, "%d", tty->rs485.delay_rts_after_send);
+    }
     else {
         epicsSnprintf(pasynUser->errorMessage,pasynUser->errorMessageSize,
                                                 "Unsupported key \"%s\"", key);
@@ -213,6 +240,8 @@ setOption(void *drvPvt, asynUser *pasynUser, const char *key, const char *val)
     struct termios termiosPrev;
     int baudPrev;
 
+    struct serial_rs485 rs485Prev;
+
     assert(tty);
     asynPrint(pasynUser, ASYN_TRACE_FLOW,
                     "%s setOption key %s val %s\n", tty->portName, key, val);
@@ -220,6 +249,7 @@ setOption(void *drvPvt, asynUser *pasynUser, const char *key, const char *val)
     /* Make a copy of tty->termios and tty->baud so we can restore them in case of errors */                
     termiosPrev = tty->termios;
     baudPrev = tty->baud;
+    rs485Prev = tty->rs485;
 
     if (epicsStrCaseCmp(key, "baud") == 0) {
         int baud;
@@ -466,6 +496,63 @@ setOption(void *drvPvt, asynUser *pasynUser, const char *key, const char *val)
         }
 #endif
     }
+    else if (epicsStrCaseCmp(key, "rs485_enable") == 0) {
+        if (epicsStrCaseCmp(val, "Y") == 0) {
+           tty->rs485.flags |= SER_RS485_ENABLED;
+        }
+        else if (epicsStrCaseCmp(val, "N") == 0) {
+           tty->rs485.flags = 0;
+        }
+        else {
+            epicsSnprintf(pasynUser->errorMessage,pasynUser->errorMessageSize,
+                                                    "Invalid rs485_enable value.");
+            return asynError;
+        }
+    }
+    else if (epicsStrCaseCmp(key, "rs485_rts_on_send") == 0) {
+        if (epicsStrCaseCmp(val, "Y") == 0) {
+           tty->rs485.flags |= SER_RS485_RTS_ON_SEND;
+        }
+        else if (epicsStrCaseCmp(val, "N") == 0) {
+           tty->rs485.flags &= ~(SER_RS485_RTS_ON_SEND);
+        }
+        else {
+            epicsSnprintf(pasynUser->errorMessage,pasynUser->errorMessageSize,
+                                                    "Invalid rs485_rts_on_send value.");
+            return asynError;
+        }
+    }
+    else if (epicsStrCaseCmp(key, "rs485_rts_after_send") == 0) {
+        if (epicsStrCaseCmp(val, "Y") == 0) {
+           tty->rs485.flags |= SER_RS485_RTS_AFTER_SEND;
+        }
+        else if (epicsStrCaseCmp(val, "N") == 0) {
+           tty->rs485.flags &= ~(SER_RS485_RTS_AFTER_SEND);
+        }
+        else {
+            epicsSnprintf(pasynUser->errorMessage,pasynUser->errorMessageSize,
+                                                    "Invalid rs485_rts_on_send value.");
+            return asynError;
+        }
+    }
+    else if (epicsStrCaseCmp(key, "rs485_delay_rts_before_send") == 0) {
+        unsigned delay;
+        if(sscanf(val, "%u", &delay) != 1) {
+            epicsSnprintf(pasynUser->errorMessage, pasynUser->errorMessageSize,
+                                                                "Bad number");
+            return asynError;
+        }
+        tty->rs485.delay_rts_before_send = delay;
+    }
+    else if (epicsStrCaseCmp(key, "rs485_delay_rts_after_send") == 0) {
+        unsigned delay;
+        if(sscanf(val, "%u", &delay) != 1) {
+            epicsSnprintf(pasynUser->errorMessage, pasynUser->errorMessageSize,
+                                                                "Bad number");
+            return asynError;
+        }
+        tty->rs485.delay_rts_after_send = delay;
+    }
     else if (epicsStrCaseCmp(key, "") != 0) {
         epicsSnprintf(pasynUser->errorMessage,pasynUser->errorMessageSize,
                                                 "Unsupported key \"%s\"", key);
@@ -476,6 +563,7 @@ setOption(void *drvPvt, asynUser *pasynUser, const char *key, const char *val)
             /* Restore previous values of tty->baud and tty->termios */
             tty->baud = baudPrev;
             tty->termios = termiosPrev;
+            tty->rs485 = rs485Prev;
             return asynError;
         }
     }
